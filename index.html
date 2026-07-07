@@ -34,15 +34,10 @@
               Usuario demo: demo@autofinanzas.pe / contraseña 1234
             </p>
             <div class="form-row two">
-              <select id="loginDocType" aria-label="Tipo de documento">
-                <option>DNI</option>
-                <option>CE</option>
-                <option>Pasaporte</option>
-              </select>
               <input
                 id="loginDocNumber"
                 type="text"
-                placeholder="N° de documento"
+                placeholder="email"
               />
             </div>
             <input
@@ -203,7 +198,7 @@
                   type="number"
                   min="10"
                   max="30"
-                  step="0.05"
+                  step="any"
                   value="20"
                 />
               </div>
@@ -214,7 +209,7 @@
                   type="number"
                   min="8.5"
                   max="16.5"
-                  step="0.05"
+                  step="any"
                   value="11.75"
                 />
               </div>
@@ -224,7 +219,7 @@
                   id="cokPct"
                   type="number"
                   min="11.80"
-                  step="0.05"
+                  step="any"
                   value="14.75"
                 />
               </div>
@@ -243,7 +238,7 @@
                   type="number"
                   min="40"
                   max="50"
-                  step="0.05"
+                  step="any"
                   value="40"
                 />
               </div>
@@ -274,24 +269,25 @@
                 </select>
               </div>
               <div class="form-group">
-                <label>Tasa mensual desgravamen (%)</label
+                <label id="sdRateLabel">Tasa mensual desgravamen (%)</label
                 ><input
                   id="sdRate"
                   type="number"
                   min="0"
                   max="1"
-                  step="0.01"
+                  step="any"
                   value="0.08"
                 />
               </div>
               <div class="form-group">
-                <label>Tasa mensual seguro vehicular (%)</label
+                <label id="vehicleInsuranceRateLabel"
+                  >Tasa mensual seguro vehicular (%)</label
                 ><input
                   id="vehicleInsuranceRate"
                   type="number"
                   min="0"
                   max="1"
-                  step="0.01"
+                  step="any"
                   value="0.12"
                 />
               </div>

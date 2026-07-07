@@ -1,6 +1,6 @@
 const API =
   window.location.hostname === "127.0.0.1" ||
-  window.location.hostname === "localhost"
+    window.location.hostname === "localhost"
     ? "http://127.0.0.1:5000"
     : "https://autofinanzas-backend.redwave-e7e23e62.canadacentral.azurecontainerapps.io";
 
@@ -21,6 +21,13 @@ const MARKET_DATA = {
     terms: [24, 36],
     graceMax: 3,
     graceLabel: "Hasta 3 meses (parcial/total)",
+    sdMin: 0.077,
+    sdMax: 0.097,
+    sdLabel: "0.077% - 0.097% mensual",
+    vehicleInsuranceUnit: "pctMonthly",
+    vehicleInsuranceMin: 4.86 / 12,
+    vehicleInsuranceMax: 8.84 / 12,
+    vehicleInsuranceLabel: "4.86% - 8.84% anual (0.4050% - 0.7367% mensual)",
   },
   BBVA: {
     teaMin: 8.5,
@@ -34,6 +41,13 @@ const MARKET_DATA = {
     terms: [24, 36],
     graceMax: 2,
     graceLabel: "1 a 2 meses",
+    sdMin: 0.069,
+    sdMax: 0.1428,
+    sdLabel: "0.069% - 0.1428% mensual",
+    vehicleInsuranceUnit: "amountMonthly",
+    vehicleInsuranceMin: 18,
+    vehicleInsuranceMax: 35,
+    vehicleInsuranceLabel: "USD 18 - USD 35 mensual",
   },
   Interbank: {
     teaMin: 8.99,
@@ -47,6 +61,13 @@ const MARKET_DATA = {
     terms: [24, 36],
     graceMax: 2,
     graceLabel: "Hasta 2 meses",
+    sdMin: 0.0375,
+    sdMax: 0.075,
+    sdLabel: "0.0375% - 0.075% mensual",
+    vehicleInsuranceUnit: "pctMonthly",
+    vehicleInsuranceMin: 0.2833,
+    vehicleInsuranceMax: 6.73 / 12,
+    vehicleInsuranceLabel: "0.2833% - 0.5608% mensual",
   },
   Scotiabank: {
     teaMin: 9.0,
@@ -60,6 +81,13 @@ const MARKET_DATA = {
     terms: [24, 36],
     graceMax: 2,
     graceLabel: "Hasta 2 meses",
+    sdMin: 0.1045,
+    sdMax: 0.1358,
+    sdLabel: "0.1045% - 0.1358% mensual",
+    vehicleInsuranceUnit: "pctMonthly",
+    vehicleInsuranceMin: 0.5064,
+    vehicleInsuranceMax: 0.5064,
+    vehicleInsuranceLabel: "0.5064% mensual",
   },
   BanBif: {
     teaMin: 9.0,
@@ -73,6 +101,13 @@ const MARKET_DATA = {
     terms: [24, 36],
     graceMax: 1,
     graceLabel: "1 mes",
+    sdMin: 0.07,
+    sdMax: 0.07,
+    sdLabel: "0.070% mensual",
+    vehicleInsuranceUnit: "pctMonthly",
+    vehicleInsuranceMin: 0.2927,
+    vehicleInsuranceMax: 0.2927,
+    vehicleInsuranceLabel: "0.2927% mensual",
   },
 };
 
@@ -140,9 +175,9 @@ function bindEvents() {
     saveCalculatedPlan("Borrador"),
   );
   byId("cancelPlan")?.addEventListener("click", () => {
-  resetPlanFormMode();
-  goPage("dashboard");
-});
+    resetPlanFormMode();
+    goPage("dashboard");
+  });
 
   byId("planSearch")?.addEventListener("input", renderPlans);
   byId("planTermFilter")?.addEventListener("change", renderPlans);
@@ -340,7 +375,7 @@ function updateBankInputs() {
   const teaInput = byId("teaPct");
   teaInput.min = bank.teaMin;
   teaInput.max = bank.teaMax;
-  teaInput.step = "0.05";
+  teaInput.step = "any";
   teaInput.value = clampNumber(
     Number(teaInput.value || (bank.teaMin + bank.teaMax) / 2),
     bank.teaMin,
@@ -351,7 +386,7 @@ function updateBankInputs() {
   const initialInput = byId("initialPct");
   initialInput.min = bank.initialMin;
   initialInput.max = bank.initialMax;
-  initialInput.step = "0.05";
+  initialInput.step = "any";
   initialInput.value = clampNumber(
     Number(initialInput.value || bank.initialMin),
     bank.initialMin,
@@ -361,12 +396,38 @@ function updateBankInputs() {
   const balloonInput = byId("balloonPct");
   balloonInput.min = bank.balloonMin;
   balloonInput.max = bank.balloonMax;
-  balloonInput.step = "0.05";
+  balloonInput.step = "any";
   balloonInput.value = clampNumber(
     Number(balloonInput.value || bank.balloonMin),
     bank.balloonMin,
     bank.balloonMax,
   ).toFixed(2);
+
+  byId("bankInfo").textContent =
+    `Referencia ${entity}: TEA ${bank.teaMin.toFixed(2)}% - ${bank.teaMax.toFixed(2)}%, cuota inicial ${bank.initialLabel}, cuota balon ${bank.balloonLabel}, gracia ${bank.graceLabel}, desgravamen ${bank.sdLabel} y seguro vehicular ${bank.vehicleInsuranceLabel}.`;
+
+  configureInsuranceInput(
+    "sdRate",
+    "sdRateLabel",
+    "Tasa mensual desgravamen (%)",
+    bank.sdMin,
+    bank.sdMax,
+    Number(byId("sdRate").value || bank.sdMin),
+    4,
+  );
+
+  const isVehicleAmount = bank.vehicleInsuranceUnit === "amountMonthly";
+  configureInsuranceInput(
+    "vehicleInsuranceRate",
+    "vehicleInsuranceRateLabel",
+    isVehicleAmount
+      ? "Seguro vehicular mensual (USD)"
+      : "Tasa mensual seguro vehicular (%)",
+    bank.vehicleInsuranceMin,
+    bank.vehicleInsuranceMax,
+    Number(byId("vehicleInsuranceRate").value || bank.vehicleInsuranceMin),
+    isVehicleAmount ? 2 : 4,
+  );
 
   byId("graceMonths").innerHTML = "";
   for (let i = 0; i <= bank.graceMax; i++) {
@@ -387,15 +448,42 @@ function updateCokInputConstraints() {
   if (!teaInput || !cokInput) return;
 
   const teaPct = Number(teaInput.value || 0);
-  const minCok = teaPct + 0.05;
-
-  cokInput.min = minCok.toFixed(2);
+  cokInput.min = String(teaPct);
+  cokInput.step = "any";
 
   if (Number(cokInput.value || 0) <= teaPct) {
     cokInput.value = (teaPct + 3).toFixed(2);
   }
 
   clearInputError("cokPct");
+}
+
+function configureInsuranceInput(
+  inputId,
+  labelId,
+  label,
+  min,
+  max,
+  currentValue,
+  decimals,
+) {
+  const input = byId(inputId);
+  const labelEl = byId(labelId);
+  if (!input) return;
+
+  const fixed = Math.abs(max - min) < 1e-9;
+  input.min = min;
+  input.max = max;
+  input.step = "any";
+  input.readOnly = fixed;
+  input.value = clampNumber(currentValue, min, max).toFixed(decimals);
+  input.title = fixed
+    ? "Valor fijo segun la entidad financiera seleccionada."
+    : `Valor permitido entre ${min.toFixed(decimals)} y ${max.toFixed(decimals)}.`;
+
+  if (labelEl) {
+    labelEl.textContent = fixed ? `${label} - fijo` : label;
+  }
 }
 
 async function saveCalculatedPlan(status) {
@@ -431,13 +519,13 @@ async function saveCalculatedPlan(status) {
 
     const data = wasEditing
       ? await apiRequest(`/api/plans/${planIdToEdit}`, {
-          method: "PUT",
-          body: JSON.stringify(payload),
-        })
+        method: "PUT",
+        body: JSON.stringify(payload),
+      })
       : await apiRequest("/api/plans", {
-          method: "POST",
-          body: JSON.stringify(payload),
-        });
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
 
     if (!data || !data.plan) {
       throw new Error("El backend no devolvió el plan actualizado.");
@@ -498,11 +586,10 @@ function calculatePlan(values) {
 
   const initialAmount = (values.vehiclePrice * values.initialPct) / 100;
   const principal = values.vehiclePrice - initialAmount;
-  const balloonAmount = (principal * values.balloonPct) / 100;
+  const balloonAmount = (values.vehiclePrice * values.balloonPct) / 100;
 
   let balance = principal;
   const rows = [];
-  const debtorCashflows = [principal];
   const baseCashflows = [principal];
 
   let totalInterest = 0;
@@ -542,12 +629,12 @@ function calculatePlan(values) {
     if (values.graceType === "Total") {
       // El desgravamen varía según el saldo inicial de cada mes y el seguro vehicular se mantiene activo
       sd = values.includeSd ? principal * (values.sdRatePctMonthly / 100) : 0;
-      veh = values.includeVehicleInsurance ? values.vehiclePrice * (values.vehicleInsurancePctMonthly / 100) : 0;
+      veh = getMonthlyVehicleInsurance(values);
       balance = opening + interest + sd + veh;
     } else if (values.graceType === "Parcial") {
       // En gracia parcial se paga el interés y los seguros se capitalizan.
       sd = values.includeSd ? principal * (values.sdRatePctMonthly / 100) : 0;
-      veh = values.includeVehicleInsurance ? values.vehiclePrice * (values.vehicleInsurancePctMonthly / 100) : 0;
+      veh = getMonthlyVehicleInsurance(values);
       balance = opening + sd + veh;
     }
 
@@ -555,12 +642,11 @@ function calculatePlan(values) {
       values.graceType === "Total"
         ? 0
         : values.graceType === "Parcial"
-        ? cuotaFinanciera
-        : cuotaFinanciera + sd + veh;
+          ? cuotaFinanciera
+          : cuotaFinanciera + sd + veh;
 
     totalInterest += interest;
     totalPayment += totalRowPayment;
-    debtorCashflows.push(-totalRowPayment);
     baseCashflows.push(-cuotaFinanciera);
 
     const mysqlDate = formatToMySQLDate(addMonths(values.start, k - 1));
@@ -607,13 +693,12 @@ function calculatePlan(values) {
 
     // Desgravamen fijo sobre el monto financiado inicial; seguro vehicular sobre el precio del bien.
     const sd = values.includeSd ? principal * (values.sdRatePctMonthly / 100) : 0;
-    const veh = values.includeVehicleInsurance ? values.vehiclePrice * (values.vehicleInsurancePctMonthly / 100) : 0;
+    const veh = getMonthlyVehicleInsurance(values);
 
     const totalRowPayment = cuotaBase + balloonPaid + sd + veh;
 
     totalInterest += interest;
     totalPayment += totalRowPayment;
-    debtorCashflows.push(-totalRowPayment);
     baseCashflows.push(-(cuotaBase + balloonPaid));
 
     const mysqlDate = formatToMySQLDate(addMonths(values.start, k - 1));
@@ -637,7 +722,7 @@ function calculatePlan(values) {
   }
 
   // 4. Indicadores.
-  let monthlyIrr = irrBisection(debtorCashflows);
+  let monthlyIrr = irrBisection(baseCashflows);
   if (monthlyIrr === null) monthlyIrr = monthlyRate;
 
   const tcea = (Math.pow(1 + monthlyIrr, 12) - 1) * 100;
@@ -703,6 +788,19 @@ function paymentWithBalloon(principal, monthlyRate, months, balloon) {
     (1 - Math.pow(1 + monthlyRate, -months)) / monthlyRate;
 
   return Math.max(annuityBase / annuityFactor, 0);
+}
+
+function getMonthlyVehicleInsurance(values) {
+  if (!values.includeVehicleInsurance) return 0;
+
+  const bank = MARKET_DATA[values.entity];
+  const value = Number(values.vehicleInsurancePctMonthly || 0);
+
+  if (bank?.vehicleInsuranceUnit === "amountMonthly") {
+    return value;
+  }
+
+  return values.vehiclePrice * (value / 100);
 }
 
 function teaToTem(teaPct) {
@@ -883,6 +981,7 @@ function fillPlanFormFromPlan(plan) {
 
 function deriveInsuranceRatesFromPlan(plan) {
   const rows = plan.schedule || [];
+  const bank = MARKET_DATA[plan.entity] || {};
 
   const sdRow = rows.find(
     (r) =>
@@ -894,11 +993,13 @@ function deriveInsuranceRatesFromPlan(plan) {
 
   const sdRatePctMonthly = sdRow
     ? (Number(sdRow.seguroDesgravamen) / Number(sdRow.saldoInicial)) * 100
-    : 0.08;
+    : Number(bank.sdMin || 0);
 
   const vehicleInsurancePctMonthly = vehRow
-    ? (Number(vehRow.seguroVehicular) / Number(plan.vehiclePrice || 1)) * 100
-    : 0.12;
+    ? bank.vehicleInsuranceUnit === "amountMonthly"
+      ? Number(vehRow.seguroVehicular)
+      : (Number(vehRow.seguroVehicular) / Number(plan.vehiclePrice || 1)) * 100
+    : Number(bank.vehicleInsuranceMin || 0);
 
   return {
     hasSd: Boolean(sdRow),
@@ -1006,12 +1107,22 @@ function normalizePlanForDisplay(plan) {
     normalizedSchedule.length && Number(plan.loanAmount || 0) > 0
       ? npv(teaToTem(cokPct), baseCashflows)
       : Number(plan.van || 0);
+  let recalculatedIrr = irrBisection(baseCashflows);
+  if (recalculatedIrr === null) {
+    recalculatedIrr =
+      Number.isFinite(Number(plan.tirMonthlyPct))
+        ? Number(plan.tirMonthlyPct) / 100
+        : teaToTem(Number(plan.teaPct || 0));
+  }
+  const recalculatedTcea = (Math.pow(1 + recalculatedIrr, 12) - 1) * 100;
 
   return {
     ...plan,
     cokPct,
     cokTemPct: teaToTem(cokPct) * 100,
     van: Math.abs(recalculatedVan) < 0.01 ? 0 : recalculatedVan,
+    tirMonthlyPct: recalculatedIrr * 100,
+    tceaPct: recalculatedTcea,
     schedule: normalizedSchedule,
     monthlyPayment: fixedPayment,
     totalInterest,
@@ -1023,7 +1134,7 @@ function buildExcelBaseFlow(plan = {}, rows = []) {
   const loanAmount =
     Number(plan.loanAmount || 0) ||
     Number(plan.vehiclePrice || 0) *
-      (1 - Number(plan.initialPct || 0) / 100);
+    (1 - Number(plan.initialPct || 0) / 100);
   const teaPct = Number(plan.teaPct || 0);
   const termMonths = Number(plan.termMonths || 0);
   const balloonPct = Number(plan.balloonPct || 0);
@@ -1038,7 +1149,7 @@ function buildExcelBaseFlow(plan = {}, rows = []) {
   }
 
   const monthlyRate = teaToTem(teaPct);
-  const balloonAmount = (loanAmount * balloonPct) / 100;
+  const balloonAmount = (Number(plan.vehiclePrice || 0) * balloonPct) / 100;
   const cashflows = [loanAmount];
 
   let balance = loanAmount;
@@ -1092,7 +1203,7 @@ function normalizeScheduleRows(rows = [], plan = {}) {
     Number(plan.loanAmount || 0) ||
     vehiclePrice * (1 - Number(plan.initialPct || 0) / 100);
   const balloonPct = Number(plan.balloonPct || 0);
-  const expectedBalloon = loanAmount * balloonPct / 100;
+  const expectedBalloon = vehiclePrice * balloonPct / 100;
 
   return rows.map((r) => {
     const tipo = String(r.tipo || "").toLowerCase();
@@ -1212,8 +1323,8 @@ function renderScheduleTable(tableId, rows, plan = {}) {
     </thead>
     <tbody>
       ${normalizedRows
-        .map(
-          (r) => `
+      .map(
+        (r) => `
         <tr>
           <td>${r.cuota}</td>
           <td>${r.fecha}</td>
@@ -1228,8 +1339,8 @@ function renderScheduleTable(tableId, rows, plan = {}) {
           <td>${money(r.saldoFinal)}</td>
           <td>${r.tipo}</td>
         </tr>`,
-        )
-        .join("")}
+      )
+      .join("")}
     </tbody>`;
 }
 
@@ -1242,12 +1353,26 @@ function fillMarketTable() {
     </thead>
     <tbody>
       ${Object.entries(MARKET_DATA)
-        .map(
-          ([bank, d]) => `
+      .map(
+        ([bank, d]) => `
         <tr><td>${bank}</td><td>${d.teaMin.toFixed(2)}% - ${d.teaMax.toFixed(2)}%</td><td>${d.initialLabel}</td><td>${d.balloonLabel}</td><td>24 a 36 meses</td><td>${d.graceLabel}</td></tr>
       `,
-        )
-        .join("")}
+      )
+      .join("")}
+    </tbody>`;
+
+  table.innerHTML = `
+    <thead>
+      <tr><th>Entidad Financiera</th><th>Rango TEA Aprox.</th><th>Cuota inicial minima</th><th>Cuota balon final</th><th>Plazo maximo</th><th>Periodo de gracia</th><th>Seguro desgravamen</th><th>Seguro vehicular</th></tr>
+    </thead>
+    <tbody>
+      ${Object.entries(MARKET_DATA)
+      .map(
+        ([bank, d]) => `
+        <tr><td>${bank}</td><td>${d.teaMin.toFixed(2)}% - ${d.teaMax.toFixed(2)}%</td><td>${d.initialLabel}</td><td>${d.balloonLabel}</td><td>24 a 36 meses</td><td>${d.graceLabel}</td><td>${d.sdLabel}</td><td>${d.vehicleInsuranceLabel}</td></tr>
+      `,
+      )
+      .join("")}
     </tbody>`;
 }
 
@@ -1341,7 +1466,41 @@ function validatePlanInputs(values) {
     };
   }
 
+  if (
+    values.includeSd &&
+    !isWithinRange(values.sdRatePctMonthly, bank.sdMin, bank.sdMax)
+  ) {
+    return {
+      ok: false,
+      message: `El seguro de desgravamen para ${values.entity} debe estar entre ${bank.sdMin.toFixed(4)}% y ${bank.sdMax.toFixed(4)}% mensual.`,
+      inputId: "sdRate",
+    };
+  }
+
+  if (
+    values.includeVehicleInsurance &&
+    !isWithinRange(
+      values.vehicleInsurancePctMonthly,
+      bank.vehicleInsuranceMin,
+      bank.vehicleInsuranceMax,
+    )
+  ) {
+    const isAmount = bank.vehicleInsuranceUnit === "amountMonthly";
+    return {
+      ok: false,
+      message: isAmount
+        ? `El seguro vehicular para ${values.entity} debe estar entre USD ${bank.vehicleInsuranceMin.toFixed(2)} y USD ${bank.vehicleInsuranceMax.toFixed(2)} mensuales.`
+        : `El seguro vehicular para ${values.entity} debe estar entre ${bank.vehicleInsuranceMin.toFixed(4)}% y ${bank.vehicleInsuranceMax.toFixed(4)}% mensual.`,
+      inputId: "vehicleInsuranceRate",
+    };
+  }
+
   return { ok: true };
+}
+
+function isWithinRange(value, min, max) {
+  const EPS = 1e-9;
+  return Number.isFinite(value) && value >= min - EPS && value <= max + EPS;
 }
 
 function clearInputError(id) {
