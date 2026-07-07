@@ -126,6 +126,8 @@ function bindEvents() {
     );
 
   byId("entitySelect")?.addEventListener("change", updateBankInputs);
+  byId("teaPct")?.addEventListener("input", updateCokInputConstraints);
+  byId("cokPct")?.addEventListener("input", () => clearInputError("cokPct"));
   byId("vehiclePrice")?.addEventListener("input", () => {
     byId("priceLabel").textContent = money(Number(byId("vehiclePrice").value));
   });
@@ -344,6 +346,7 @@ function updateBankInputs() {
     bank.teaMin,
     bank.teaMax,
   ).toFixed(2);
+  updateCokInputConstraints();
 
   const initialInput = byId("initialPct");
   initialInput.min = bank.initialMin;
@@ -376,6 +379,23 @@ function updateBankInputs() {
   byId("termMonths").innerHTML = bank.terms
     .map((t) => `<option value="${t}">${t} meses</option>`)
     .join("");
+}
+
+function updateCokInputConstraints() {
+  const teaInput = byId("teaPct");
+  const cokInput = byId("cokPct");
+  if (!teaInput || !cokInput) return;
+
+  const teaPct = Number(teaInput.value || 0);
+  const minCok = teaPct + 0.05;
+
+  cokInput.min = minCok.toFixed(2);
+
+  if (Number(cokInput.value || 0) <= teaPct) {
+    cokInput.value = (teaPct + 3).toFixed(2);
+  }
+
+  clearInputError("cokPct");
 }
 
 async function saveCalculatedPlan(status) {
@@ -459,6 +479,7 @@ function collectPlanInputs() {
     vehiclePrice: Number(byId("vehiclePrice").value),
     initialPct: Number(byId("initialPct").value),
     teaPct: Number(byId("teaPct").value),
+    cokPct: Number(byId("cokPct").value),
     termMonths: Number(byId("termMonths").value),
     graceMonths: Number(byId("graceMonths").value),
     graceType: byId("graceType").value,
@@ -473,14 +494,16 @@ function collectPlanInputs() {
 
 function calculatePlan(values) {
   const monthlyRate = teaToTem(values.teaPct);
+  const monthlyCok = teaToTem(values.cokPct);
 
   const initialAmount = (values.vehiclePrice * values.initialPct) / 100;
   const principal = values.vehiclePrice - initialAmount;
-  const balloonAmount = (values.vehiclePrice * values.balloonPct) / 100;
+  const balloonAmount = (principal * values.balloonPct) / 100;
 
   let balance = principal;
   const rows = [];
-  const lenderCashflows = [-principal];
+  const debtorCashflows = [principal];
+  const baseCashflows = [principal];
 
   let totalInterest = 0;
   let totalPayment = 0;
@@ -518,19 +541,27 @@ function calculatePlan(values) {
 
     if (values.graceType === "Total") {
       // El desgravamen varía según el saldo inicial de cada mes y el seguro vehicular se mantiene activo
-      sd = values.includeSd ? opening * (values.sdRatePctMonthly / 100) : 0;
+      sd = values.includeSd ? principal * (values.sdRatePctMonthly / 100) : 0;
       veh = values.includeVehicleInsurance ? values.vehiclePrice * (values.vehicleInsurancePctMonthly / 100) : 0;
+      balance = opening + interest + sd + veh;
     } else if (values.graceType === "Parcial") {
-      // Modificación: En periodo de gracia parcial, tanto desgravamen como seguro vehicular son 0
-      sd = 0;
-      veh = 0;
+      // En gracia parcial se paga el interés y los seguros se capitalizan.
+      sd = values.includeSd ? principal * (values.sdRatePctMonthly / 100) : 0;
+      veh = values.includeVehicleInsurance ? values.vehiclePrice * (values.vehicleInsurancePctMonthly / 100) : 0;
+      balance = opening + sd + veh;
     }
 
-    const totalRowPayment = cuotaFinanciera + sd + veh;
+    const totalRowPayment =
+      values.graceType === "Total"
+        ? 0
+        : values.graceType === "Parcial"
+        ? cuotaFinanciera
+        : cuotaFinanciera + sd + veh;
 
     totalInterest += interest;
     totalPayment += totalRowPayment;
-    lenderCashflows.push(totalRowPayment);
+    debtorCashflows.push(-totalRowPayment);
+    baseCashflows.push(-cuotaFinanciera);
 
     const mysqlDate = formatToMySQLDate(addMonths(values.start, k - 1));
 
@@ -549,9 +580,6 @@ function calculatePlan(values) {
       tipo: `Gracia ${values.graceType}`,
     });
   }
-
-  // Guardamos el saldo base al salir de la gracia para calcular el desgravamen FIJO posterior
-  const regularSdBaseBalance = balance;
 
   // 2. Cuota regular con Compra Inteligente.
   const remainingTerm = values.termMonths - rows.length;
@@ -577,15 +605,16 @@ function calculatePlan(values) {
     let closing = opening - amort - balloonPaid;
     if (Math.abs(closing) < EPS) closing = 0;
 
-    // Desgravamen calculado sobre el saldo base constante; seguro vehicular regular activo en ordinarios
-    const sd = values.includeSd ? regularSdBaseBalance * (values.sdRatePctMonthly / 100) : 0;
+    // Desgravamen fijo sobre el monto financiado inicial; seguro vehicular sobre el precio del bien.
+    const sd = values.includeSd ? principal * (values.sdRatePctMonthly / 100) : 0;
     const veh = values.includeVehicleInsurance ? values.vehiclePrice * (values.vehicleInsurancePctMonthly / 100) : 0;
 
     const totalRowPayment = cuotaBase + balloonPaid + sd + veh;
 
     totalInterest += interest;
     totalPayment += totalRowPayment;
-    lenderCashflows.push(totalRowPayment);
+    debtorCashflows.push(-totalRowPayment);
+    baseCashflows.push(-(cuotaBase + balloonPaid));
 
     const mysqlDate = formatToMySQLDate(addMonths(values.start, k - 1));
 
@@ -608,16 +637,13 @@ function calculatePlan(values) {
   }
 
   // 4. Indicadores.
-  let monthlyIrr = irrBisection(lenderCashflows);
+  let monthlyIrr = irrBisection(debtorCashflows);
   if (monthlyIrr === null) monthlyIrr = monthlyRate;
 
   const tcea = (Math.pow(1 + monthlyIrr, 12) - 1) * 100;
 
-  // Corrección del VAN según la vista del deudor (Costo Actual Positivo)
-  const vanCostoDeudor = lenderCashflows.reduce(
-    (acc, flow, idx) => acc + flow / Math.pow(1 + monthlyRate, idx),
-    0,
-  );
+  // VAN descontado con COK mensual sobre el Flujo Base del Excel.
+  const vanDeudor = npv(monthlyCok, baseCashflows);
 
   return {
     summary: {
@@ -626,6 +652,8 @@ function calculatePlan(values) {
       vehiclePrice: values.vehiclePrice,
       initialPct: values.initialPct,
       teaPct: values.teaPct,
+      cokPct: values.cokPct,
+      cokTemPct: monthlyCok * 100,
       temPct: monthlyRate * 100,
       termMonths: values.termMonths,
       graceMonths,
@@ -637,7 +665,7 @@ function calculatePlan(values) {
       totalPayment,
       totalInterest,
       tceaPct: tcea,
-      van: Math.abs(vanCostoDeudor) < 0.01 ? 0 : vanCostoDeudor,
+      van: Math.abs(vanDeudor) < 0.01 ? 0 : vanDeudor,
       tirMonthlyPct: monthlyIrr * 100,
       initialAmount,
       balloonAmount,
@@ -778,7 +806,7 @@ function renderPlans() {
           <div>
             <h3>📄 ${escapeHtml(p.name)}</h3>
             <div class="plan-meta">
-              Precio vehículo: ${money(p.vehiclePrice)} | TEA: ${pct(p.teaPct)} |
+              Precio vehículo: ${money(p.vehiclePrice)} | TEA: ${pct(p.teaPct)} | COK: ${pct(p.cokPct)} |
               Plazo: ${p.termMonths} meses | Cuota Inicial: ${pct(p.initialPct)} |
               Cuota Balón: ${pct(p.balloonPct)} | Meses de Gracia: ${p.graceMonths}
             </div>
@@ -830,6 +858,8 @@ function fillPlanFormFromPlan(plan) {
 
   byId("initialPct").value = Number(plan.initialPct || 0).toFixed(2);
   byId("teaPct").value = Number(plan.teaPct || 0).toFixed(2);
+  byId("cokPct").value = Number(plan.cokPct || Number(plan.teaPct || 0) + 3).toFixed(2);
+  updateCokInputConstraints();
   byId("termMonths").value = String(plan.termMonths || 24);
   byId("graceMonths").value = String(plan.graceMonths || 0);
   byId("graceType").value = plan.graceType || "Sin gracia";
@@ -915,6 +945,7 @@ function displaySelectedPlan(plan) {
   byId("selTcea").textContent = pct(normalizedPlan.tceaPct);
   byId("selTir").textContent = pct(normalizedPlan.tirMonthlyPct, 4);
   byId("selVan").textContent = money(normalizedPlan.van);
+  byId("selCok").textContent = pct(normalizedPlan.cokTemPct, 4);
   byId("selInterest").textContent = money(normalizedPlan.totalInterest);
   byId("selTEM").textContent = pct(normalizedPlan.temPct, 4);
   byId("selTotalLoan").textContent = money(normalizedPlan.loanAmount);
@@ -928,13 +959,23 @@ function displayResult(summary, schedule) {
   byId("resPayment").textContent = money(summary.monthlyPayment);
   byId("resTem").textContent = pct(summary.temPct, 4);
   byId("resTcea").textContent = pct(summary.tceaPct);
+  byId("resCok").textContent = pct(summary.cokTemPct, 4);
+  byId("resTir").textContent = pct(summary.tirMonthlyPct, 4);
+  byId("resVan").textContent = money(summary.van);
   renderScheduleTable("resultSchedule", schedule, summary);
 }
 
 function normalizePlanForDisplay(plan) {
   const normalizedSchedule = normalizeScheduleRows(plan.schedule || [], plan);
 
-  const fixedPayment = getFixedFinancialPayment(normalizedSchedule);
+  const schedulePayment = getFixedFinancialPayment(normalizedSchedule);
+  const storedPayment = Number(plan.monthlyPayment || 0);
+  const exactBaseFlow = buildExcelBaseFlow(plan, normalizedSchedule);
+  const fixedPayment =
+    exactBaseFlow?.payment ||
+    (Number.isFinite(storedPayment) && storedPayment > 0
+      ? storedPayment
+      : schedulePayment);
 
   const totalInterest = normalizedSchedule.reduce(
     (acc, r) => acc + Number(r.interes || 0),
@@ -946,8 +987,31 @@ function normalizePlanForDisplay(plan) {
     0,
   );
 
+  const storedCok = Number(plan.cokPct);
+  const cokPct =
+    Number.isFinite(storedCok) && storedCok > 0
+      ? storedCok
+      : Number(plan.teaPct || 0) + 3;
+  const baseCashflows =
+    exactBaseFlow?.cashflows || [
+      Number(plan.loanAmount || 0),
+      ...normalizedSchedule.map((r) => {
+        const tipo = String(r.tipo || "").toLowerCase();
+        if (tipo.includes("gracia total")) return 0;
+        if (tipo.includes("gracia parcial")) return -Number(r.interes || 0);
+        return -(fixedPayment + Number(r.cuotaBalonPagada || 0));
+      }),
+    ];
+  const recalculatedVan =
+    normalizedSchedule.length && Number(plan.loanAmount || 0) > 0
+      ? npv(teaToTem(cokPct), baseCashflows)
+      : Number(plan.van || 0);
+
   return {
     ...plan,
+    cokPct,
+    cokTemPct: teaToTem(cokPct) * 100,
+    van: Math.abs(recalculatedVan) < 0.01 ? 0 : recalculatedVan,
     schedule: normalizedSchedule,
     monthlyPayment: fixedPayment,
     totalInterest,
@@ -955,10 +1019,80 @@ function normalizePlanForDisplay(plan) {
   };
 }
 
+function buildExcelBaseFlow(plan = {}, rows = []) {
+  const loanAmount =
+    Number(plan.loanAmount || 0) ||
+    Number(plan.vehiclePrice || 0) *
+      (1 - Number(plan.initialPct || 0) / 100);
+  const teaPct = Number(plan.teaPct || 0);
+  const termMonths = Number(plan.termMonths || 0);
+  const balloonPct = Number(plan.balloonPct || 0);
+
+  if (
+    !loanAmount ||
+    !Number.isFinite(teaPct) ||
+    !termMonths ||
+    !Number.isFinite(balloonPct)
+  ) {
+    return null;
+  }
+
+  const monthlyRate = teaToTem(teaPct);
+  const balloonAmount = (loanAmount * balloonPct) / 100;
+  const cashflows = [loanAmount];
+
+  let balance = loanAmount;
+  const graceRows = rows.filter((r) =>
+    String(r.tipo || "").toLowerCase().includes("gracia"),
+  );
+  const graceMonths = Math.min(
+    Number(plan.graceMonths || graceRows.length || 0),
+    termMonths,
+  );
+  const graceType = String(plan.graceType || "").toLowerCase();
+
+  for (let i = 0; i < graceMonths; i++) {
+    const row = graceRows[i] || rows[i] || {};
+    const tipo = String(row.tipo || graceType).toLowerCase();
+    const opening = balance;
+    const interest = opening * monthlyRate;
+    const sd = Number(row.seguroDesgravamen || 0);
+    const veh = Number(row.seguroVehicular || 0);
+
+    if (tipo.includes("total")) {
+      cashflows.push(0);
+      balance = opening + interest + sd + veh;
+    } else if (tipo.includes("parcial")) {
+      cashflows.push(-interest);
+      balance = opening + sd + veh;
+    } else {
+      break;
+    }
+  }
+
+  const regularMonths = termMonths - (cashflows.length - 1);
+  const payment = paymentWithBalloon(
+    balance,
+    monthlyRate,
+    regularMonths,
+    balloonAmount,
+  );
+
+  for (let i = 0; i < regularMonths; i++) {
+    const isLast = i === regularMonths - 1;
+    cashflows.push(-(payment + (isLast ? balloonAmount : 0)));
+  }
+
+  return { cashflows, payment };
+}
+
 function normalizeScheduleRows(rows = [], plan = {}) {
   const vehiclePrice = Number(plan.vehiclePrice || 0);
+  const loanAmount =
+    Number(plan.loanAmount || 0) ||
+    vehiclePrice * (1 - Number(plan.initialPct || 0) / 100);
   const balloonPct = Number(plan.balloonPct || 0);
-  const expectedBalloon = vehiclePrice * balloonPct / 100;
+  const expectedBalloon = loanAmount * balloonPct / 100;
 
   return rows.map((r) => {
     const tipo = String(r.tipo || "").toLowerCase();
@@ -966,7 +1100,7 @@ function normalizeScheduleRows(rows = [], plan = {}) {
     const interes = Number(r.interes || 0);
     const seguroDesgravamen = Number(r.seguroDesgravamen || 0);
     const seguroVehicular = Number(r.seguroVehicular || 0);
-    const cuotaTotal = Number(r.cuotaTotal || 0);
+    let cuotaTotal = Number(r.cuotaTotal || 0);
     const saldoInicial = Number(r.saldoInicial || 0);
     const saldoFinal = Number(r.saldoFinal || 0);
 
@@ -978,6 +1112,7 @@ function normalizeScheduleRows(rows = [], plan = {}) {
       cuotaFinanciera = 0;
       cuotaBalonPagada = 0;
       amortizacion = 0;
+      cuotaTotal = 0;
     } else if (tipo.includes("gracia parcial")) {
       cuotaFinanciera = interes;
       cuotaBalonPagada = 0;
@@ -1148,6 +1283,14 @@ function validatePlanInputs(values) {
       ok: false,
       message: `La TEA para ${values.entity} debe estar entre ${bank.teaMin.toFixed(2)}% y ${bank.teaMax.toFixed(2)}%.`,
       inputId: "teaPct",
+    };
+  }
+
+  if (!Number.isFinite(values.cokPct) || values.cokPct <= values.teaPct) {
+    return {
+      ok: false,
+      message: "El COK debe ser mayor que la TEA.",
+      inputId: "cokPct",
     };
   }
 
